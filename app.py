@@ -13,13 +13,13 @@ origins = [
       "https://hopsital-recommendation-system.vercel.app", 
   ]
 
-  app.add_middleware(
+app.add_middleware(
       CORSMiddleware,
       allow_origins=origins, 
       allow_credentials=True,
       allow_methods=["*"],  
-      allow_headers=["*"],  
-  )
+      allow_headers=["*"],
+)
 
 class RecommendationRequest(BaseModel):
     location: str
