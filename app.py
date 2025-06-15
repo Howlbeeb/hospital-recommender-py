@@ -7,6 +7,19 @@ import os
 
 app = FastAPI(title="Hospital Recommender API")
 
+origins = [
+      "http://localhost:5173",  
+      "https://hopsital-recommendation-system.vercel.app", 
+  ]
+
+  app.add_middleware(
+      CORSMiddleware,
+      allow_origins=origins, 
+      allow_credentials=True,
+      allow_methods=["*"],  
+      allow_headers=["*"],  
+  )
+
 class RecommendationRequest(BaseModel):
     location: str
     service_needed: str
