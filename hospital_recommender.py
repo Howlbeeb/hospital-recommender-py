@@ -205,6 +205,34 @@ def setup_fuzzy_system():
             service_match["low"] & proximity["very_near"] & quality["high"] & user_rating["high"] &
             user_quality_pref["high"] & cost["low"] & user_cost_pref["low"],
             recommendation["medium"]
+        ),ctrl.Rule(
+            service_match["high"] & proximity["far"] & quality["high"] & user_rating["high"] &
+            cost["low"] & user_cost_pref["low"],
+            recommendation["medium"]  # Boost for high quality despite distance
+        ),
+        ctrl.Rule(
+            service_match["low"] & proximity["very_near"] & quality["medium"] & user_rating["medium"] &
+            cost["low"] & user_cost_pref["low"],
+            recommendation["medium"]
+        ),
+        ctrl.Rule(
+            service_match["high"] & proximity["near"] & quality["low"] & user_rating["medium"] &
+            cost["low"] & user_cost_pref["low"],
+            recommendation["medium"]
+        ),
+        ctrl.Rule(
+            service_match["low"] & proximity["near"] & quality["high"] & user_rating["high"] &
+            (cost["low"] | cost["medium"]) & user_cost_pref["high"],
+            recommendation["medium"]
+        ),
+        ctrl.Rule(
+            service_match["high"] & proximity["medium"] & quality["medium"] & user_rating["low"] &
+            cost["low"] & user_cost_pref["low"],
+            recommendation["medium"]
+        ),
+        ctrl.Rule(
+            service_match["low"] & proximity["far"] & quality["low"] & user_rating["low"],
+            recommendation["low"]
         )
     ]
 
