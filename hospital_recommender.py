@@ -62,7 +62,11 @@ def map_cost_rating(cost_rating):
 
 # Load and preprocess dataset
 def load_and_preprocess_data():
-    df = pd.read_csv('datasets/Lagos_hospital.csv')
+    dataset_path = "Lagos_hospital.csv"  # Updated to root directory
+    if not os.path.exists(dataset_path):
+        logger.error(f"Dataset not found at {dataset_path}")
+        raise FileNotFoundError(f"Dataset not found at {dataset_path}")
+    df = pd.read_csv(dataset_path)
     df['Cost_Numeric'] = df['Cost Level'].apply(map_cost_rating)
     df['Quality_Numeric'] = pd.to_numeric(df['Quality Score'], errors='coerce').fillna(3.0)
     df['Services'] = df['Services'].fillna('Unknown')
@@ -183,7 +187,7 @@ def get_recommendations(location, service, cost_preference, quality_preference):
         quality_preference (str): Quality preference ('Low', 'Medium', 'High')
     
     Returns:
-        dict: Dictionary containing recommendations (DataFrame as JSON) or error message
+        dict: List of recommendations or error message
     """
     try:
         # Load and preprocess data
