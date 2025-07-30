@@ -1,144 +1,120 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
 import skfuzzy as fuzz
 from skfuzzy import control as ctrl
-from geopy.distance import geodesic
-import googlemaps
-import os
-import polyline
-from datetime import datetime
 import logging
+import re
+import os
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Setup logging
+logging.basicConfig(filename='hospital_recommender.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger()
 
-# Initialize Google Maps client
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "YOUR_API_KEY")
-gmaps = googlemaps.Client(key=GOOGLE_API_KEY)
-
-DEFAULT_COORDS = (6.5244, 3.3792)
-
+# Utility functions
 def get_valid_category(value, default):
-    valid_options = {"low", "medium", "high"}
+    valid_options = {'low', 'medium', 'high'}
     value = value.strip().lower() if value else default.lower()
     if value in valid_options:
         return value.capitalize()
+    logger.warning(f'Invalid input "{value}". Using default: {default}')
     return default.capitalize()
 
 def map_preference_to_value(pref):
-    pref_map = {"Low": 0.33, "Medium": 0.66, "High": 1.0}
-    return pref_map.get(pref, 0.33)
+    pref_map = {'Low': 0.2, 'Medium': 0.5, 'High': 0.8}
+    return pref_map.get(pref, 0.2)
 
-def compute_service_match(user_service, hospital_services):
+def compute_service_match(user_service, hospital_services, valid_services):
     if pd.isna(hospital_services) or pd.isna(user_service):
+        logger.warning('Missing service data')
         return 0.0
     user_service = user_service.lower().strip()
-    hospital_services = hospital_services.lower().strip()
+    hospital_services = [s.strip().lower() for s in hospital_services.split(',')]
+    if user_service == 'surgery':
+        if 'surgery' in hospital_services or 'surgical services' in hospital_services:
+            if all(svc not in hospital_services for svc in ['dental surgery', 'oral surgery', 'cosmetic surgery']):
+                logger.info(f'Exact match for "surgery" in {hospital_services}')
+                return 1.0
+            else:
+                logger.info(f'Excluded mismatch for "surgery" in {hospital_services}')
+                return 0.0
+        elif any('surgery' in svc and 'dental' not in svc and 'oral' not in svc and 'cosmetic' not in svc for svc in hospital_services):
+            logger.info(f'Partial match for "surgery" in {hospital_services}')
+            return 0.95
+        logger.info(f'No match for "surgery" in {hospital_services}')
+        return 0.0
     if user_service in hospital_services:
+        logger.info(f'Exact match for "{user_service}" in {hospital_services}')
         return 1.0
-    elif any(word in hospital_services for word in user_service.split()):
-        return 0.5
+    elif any(user_service in svc for svc in hospital_services):
+        logger.info(f'Strong partial match for "{user_service}" in {hospital_services}')
+        return 0.95
+    elif any(word in ' '.join(hospital_services) for word in user_service.split()):
+        logger.info(f'Weak partial match for "{user_service}" in {hospital_services}')
+        return 0.3
+    logger.info(f'No match for "{user_service}" in {hospital_services}')
     return 0.0
 
 def map_cost_rating(cost_rating):
-    if pd.isna(cost_rating):
-        return 1.0
-    cost_map = {"Low": 1.0, "Medium": 2.0, "High": 3.0, "Premium": 3.0}
-    return cost_map.get(cost_rating.strip().capitalize(), 1.0)
+    if pd.isna(cost_rating) or cost_rating == 'N/A':
+        return 1.5
+    cost_map = {'Low': 1.0, 'Medium': 1.5, 'High': 2.0, 'Premium': 3.0}
+    return cost_map.get(cost_rating.strip().capitalize(), 1.5)
 
-def load_geocode_cache(cache_file="hospital_coordinates.csv"):
-    if os.path.exists(cache_file):
-        try:
-            cache = pd.read_csv(cache_file, index_col="Address")
-            return cache.to_dict()["Coordinates"]
-        except Exception as e:
-            logger.error(f"Error loading cache: {e}")
-    return {}
-
-def save_geocode_cache(cache, cache_file="hospital_coordinates.csv"):
-    try:
-        cache_df = pd.DataFrame.from_dict(cache, orient="index", columns=["Coordinates"])
-        cache_df.index.name = "Address"
-        cache_df.to_csv(cache_file)
-    except Exception as e:
-        logger.error(f"Error saving cache: {e}")
-
-def geocode_address(address, cache):
-    if address in cache:
-        coords_str = cache[address]
-        if coords_str == "None":
-            return DEFAULT_COORDS
-        try:
-            lat, lon = map(float, coords_str.strip("()").split(","))
-            return (lat, lon)
-        except:
-            logger.warning(f"Invalid cached coordinates for '{address}'. Re-geocoding.")
+# Load and preprocess dataset
+def load_and_preprocess_data():
+    df = pd.read_csv('datasets/Lagos_hospital.csv')
+    df['Cost_Numeric'] = df['Cost Level'].apply(map_cost_rating)
+    df['Quality_Numeric'] = pd.to_numeric(df['Quality Score'], errors='coerce').fillna(3.0)
+    df['Services'] = df['Services'].fillna('Unknown')
+    df['Full Address'] = df['Full Address'].fillna('Unknown')
     
-    try:
-        full_address = f"{address}, Lagos, Nigeria"
-        geocode_result = gmaps.geocode(full_address)
-        if geocode_result:
-            location = geocode_result[0]["geometry"]["location"]
-            coords = (location["lat"], location["lng"])
-            cache[address] = f"({coords[0]},{coords[1]})"
-            return coords
-        cache[address] = "None"
-        return DEFAULT_COORDS
-    except Exception as e:
-        logger.error(f"Geocoding error for '{address}': {e}")
-        cache[address] = "None"
-        return DEFAULT_COORDS
+    # Dynamic city extraction
+    cities = (
+        r'Ikorodu|Ikoyi|Ikeja|Victoria Island|Surulere|Badagry|Lagos Island|Agege|'
+        r'Alimosho|Apapa|Epe|Eti-Osa|Ibeju-Lekki|Ifako-Ijaiye|Kosofe|Lagos Mainland|'
+        r'Mushin|Ojo|Oshodi-Isolo|Shomolu|Ajeromi-Ifelodun|Amuwo-Odofin|'
+        r'Lekki|Ajah|Yaba|Gbagada|Maryland|Ilupeju|Ketu|Magodo|Ojota|Egbeda|'
+        r'Idimu|Ipaja|Bariga|Festac Town|Amuwo|Isolo|Okota|Ikotun'
+    )
+    df['City'] = df['Full Address'].str.extract(f'({cities})', flags=re.IGNORECASE, expand=False)
+    df['City'] = df['City'].fillna(df['Full Address'].str.split(',').str[-1].str.strip())
+    df['City'] = df['City'].str.lower().replace('', 'unknown').fillna('unknown')
+    logger.info('Dataset loaded and preprocessed')
+    
+    # Log unique cities
+    unique_cities = df['City'].unique()
+    logger.info(f'Extracted cities: {unique_cities}')
+    
+    # Dynamic valid services
+    valid_services = set()
+    for services in df['Services'].dropna():
+        valid_services.update([s.strip().lower() for s in services.split(',')])
+    valid_services = list(valid_services)
+    logger.info(f'Valid services: {valid_services}')
+    
+    return df, valid_services
 
-def calculate_distance(user_coords, hospital_coords, max_distance=10.0):
-    if user_coords is None or hospital_coords is None:
-        return 0.0, float("inf")
-    try:
-        distance = geodesic(user_coords, hospital_coords).km
-        normalized = max(0.0, 1.0 - (distance / max_distance))
-        return normalized, distance
-    except Exception as e:
-        logger.error(f"Distance calculation error: {e}")
-        return 0.0, float("inf")
-
-def get_driving_route(user_coords, hospital_coords, hospital_name):
-    if user_coords == DEFAULT_COORDS or hospital_coords == DEFAULT_COORDS:
-        return None, None, None, None
-    try:
-        directions_result = gmaps.directions(
-            origin=user_coords,
-            destination=hospital_coords,
-            mode="driving",
-            departure_time=datetime.now()
-        )
-        if directions_result and len(directions_result) > 0:
-            route = directions_result[0]["legs"][0]
-            distance = route["distance"]["text"]
-            duration = route["duration"]["text"]
-            polyline_points = route["overview_polyline"]["points"]
-            instructions = [step["html_instructions"] for step in route["steps"]]
-            return distance, duration, polyline_points, instructions
-        return None, None, None, None
-    except Exception as e:
-        logger.error(f"Error fetching route to {hospital_name}: {e}")
-        return None, None, None, None
-
-def setup_fuzzy_system():
-    cost = ctrl.Antecedent(np.arange(1, 3.1, 0.1), 'cost')
-    quality = ctrl.Antecedent(np.arange(2, 5.1, 0.1), 'quality')  # Adjusted to match dataset range
+# Fuzzy logic system
+def setup_fuzzy_system(df):
+    quality_min = max(1, df['Quality_Numeric'].min())
+    quality_max = min(5, df['Quality_Numeric'].max() + 0.1)
+    cost_min = max(1, df['Cost_Numeric'].min())
+    cost_max = min(3, df['Cost_Numeric'].max() + 0.1)
+    
+    cost = ctrl.Antecedent(np.arange(cost_min, cost_max, 0.1), 'cost')
+    quality = ctrl.Antecedent(np.arange(quality_min, quality_max, 0.1), 'quality')
     service_match = ctrl.Antecedent(np.arange(0, 1.01, 0.01), 'service_match')
     location_match = ctrl.Antecedent(np.arange(0, 1.01, 0.01), 'location_match')
     recommendation = ctrl.Consequent(np.arange(0, 1.01, 0.01), 'recommendation')
 
-    # Membership functions
-    cost['low'] = fuzz.trimf(cost.universe, [1, 1, 1.5])
-    cost['medium'] = fuzz.trimf(cost.universe, [1.2, 1.5, 2])
-    cost['high'] = fuzz.trimf(cost.universe, [1.5, 2, 2.5])
-    cost['premium'] = fuzz.trimf(cost.universe, [2, 3, 3])
+    cost['low'] = fuzz.trimf(cost.universe, [cost_min, cost_min, (cost_min + cost_max) / 2])
+    cost['medium'] = fuzz.trimf(cost.universe, [cost_min + 0.2, (cost_min + cost_max) / 2, cost_max - 0.5])
+    cost['high'] = fuzz.trimf(cost.universe, [(cost_min + cost_max) / 2, cost_max - 0.5, cost_max])
+    cost['premium'] = fuzz.trimf(cost.universe, [cost_max - 0.5, cost_max, cost_max])
 
-    quality['low'] = fuzz.trimf(quality.universe, [2, 2, 3])
-    quality['medium'] = fuzz.trimf(quality.universe, [2.5, 3, 4])
-    quality['high'] = fuzz.trimf(quality.universe, [3.5, 4.5, 5])
+    quality['low'] = fuzz.trimf(quality.universe, [quality_min, quality_min, quality_min + 1])
+    quality['medium'] = fuzz.trimf(quality.universe, [quality_min + 0.5, (quality_min + quality_max) / 2, quality_max - 0.5])
+    quality['high'] = fuzz.trimf(quality.universe, [quality_max - 1, quality_max, quality_max])
 
     service_match['low'] = fuzz.trimf(service_match.universe, [0, 0, 0.3])
     service_match['medium'] = fuzz.trimf(service_match.universe, [0.2, 0.5, 0.7])
@@ -150,9 +126,8 @@ def setup_fuzzy_system():
 
     recommendation['low'] = fuzz.trimf(recommendation.universe, [0, 0, 0.4])
     recommendation['medium'] = fuzz.trimf(recommendation.universe, [0.3, 0.5, 0.6])
-    recommendation['high'] = fuzz.trimf(recommendation.universe, [0.7, 0.85, 1])  # Tightened for differentiation
+    recommendation['high'] = fuzz.trimf(recommendation.universe, [0.7, 0.85, 1])
 
-    # 24 fuzzy rules (no weights)
     rules = [
         # Low cost preference
         ctrl.Rule(cost['low'] & service_match['high'] & location_match['high'] & quality['high'], recommendation['high']),
@@ -196,88 +171,75 @@ def setup_fuzzy_system():
     recommender_ctrl = ctrl.ControlSystem(rules)
     return ctrl.ControlSystemSimulation(recommender_ctrl)
 
-def compute_recommendation_score(row, user_service, user_cost_pref, user_quality_pref, user_coords, fuzzy_system):
+# Main API function
+def get_recommendations(location, service, cost_preference, quality_preference):
+    """
+    Generate hospital recommendations based on user inputs.
+    
+    Args:
+        location (str): Preferred city (e.g., 'Ikorodu')
+        service (str): Desired service (e.g., 'Surgery')
+        cost_preference (str): Cost preference ('Low', 'Medium', 'High')
+        quality_preference (str): Quality preference ('Low', 'Medium', 'High')
+    
+    Returns:
+        dict: Dictionary containing recommendations (DataFrame as JSON) or error message
+    """
     try:
-        service_score = compute_service_match(user_service, row["Services"])
-        cost_value = map_cost_rating(row["Cost Level"])
-        quality_value = float(row["Quality Score"]) if pd.notna(row["Quality Score"]) else 3.1
-        user_rating_value = float(row["User Rating"]) if pd.notna(row["User Rating"]) else 3.0
-        proximity_score, _ = calculate_distance(user_coords, row.get("Coordinates"))
-
-        fuzzy_system.input["cost"] = cost_value
-        fuzzy_system.input["quality"] = quality_value
-        fuzzy_system.input["user_rating"] = user_rating_value
-        fuzzy_system.input["service_match"] = service_score
-        fuzzy_system.input["user_cost_pref"] = user_cost_pref
-        fuzzy_system.input["user_quality_pref"] = user_quality_pref
-        fuzzy_system.input["proximity"] = proximity_score
-
-        fuzzy_system.compute()
-        return fuzzy_system.output.get("recommendation", 0.0)
-    except Exception as e:
-        logger.error(f"Error processing {row['Name']}: {e}")
-        return 0.0
-
-def recommend_hospitals(location, user_service, cost_pref_str, quality_pref_str):
-    try:
-        logger.info("Loading dataset Lagos_hospital.csv")
-        data = pd.read_csv("Lagos_hospital.csv")
-        data = data.dropna(subset=["Name", "Services", "Cost Level", "Quality Score", "User Rating"])
-        data["Full Address"] = data["Full Address"].fillna("Unknown")
-        data["Quality Score"] = pd.to_numeric(data["Quality Score"], errors="coerce").fillna(3.1)
-        data["User Rating"] = pd.to_numeric(data["User Rating"], errors="coerce").fillna(3.0)
-
-        cost_pref = map_preference_to_value(cost_pref_str)
-        quality_pref = map_preference_to_value(quality_pref_str)
-
-        cache_file = "hospital_coordinates.csv"
-        geocode_cache = load_geocode_cache(cache_file)
-
-        user_coords = None
-        if location:
-            user_coords = geocode_address(location, geocode_cache)
-            if user_coords == DEFAULT_COORDS:
-                logger.warning(f"Could not geocode location '{location}'. Using all hospitals without distance filter.")
+        # Load and preprocess data
+        df, valid_services = load_and_preprocess_data()
         
-        data["Coordinates"] = data["Full Address"].apply(lambda addr: geocode_address(addr, geocode_cache))
-        save_geocode_cache(geocode_cache, cache_file)
-
-        if user_coords and user_coords != DEFAULT_COORDS:
-            data["Distance_km"] = data["Coordinates"].apply(lambda coords: calculate_distance(user_coords, coords)[1])
-            data = data[data["Distance_km"] <= 10.0]
-
-        if data.empty:
-            logger.warning("No hospitals available after filtering")
-            return pd.DataFrame()
-
-        fuzzy_system = setup_fuzzy_system()
-        data["Recommendation_Score"] = data.apply(
-            lambda row: compute_recommendation_score(row, user_service, cost_pref, quality_pref, user_coords, fuzzy_system),
-            axis=1
-        )
-
-        recommendations = data[data["Recommendation_Score"] > 0].copy()
-        if recommendations.empty:
-            logger.warning(f"No hospitals found matching service '{user_service}'")
-            return pd.DataFrame()
-
-        recommendations = recommendations.sort_values(by="Recommendation_Score", ascending=False).head(3)
-
-        for idx, row in recommendations.iterrows():
-            distance, duration, polyline_points, instructions = get_driving_route(
-                user_coords, row["Coordinates"], row["Name"]
-            )
-            recommendations.at[idx, "Route_Distance"] = distance
-            recommendations.at[idx, "Route_Duration"] = duration
-            recommendations.at[idx, "Polyline_Points"] = polyline_points
-            recommendations.at[idx, "Route_Instructions"] = "; ".join(instructions) if instructions else "N/A"
-
-        return recommendations[
-            [
-                "Name", "Full Address", "Services", "Cost Level", "Quality Score",
-                "Recommendation_Score", "Coordinates", "Route_Distance", "Route_Duration", "Route_Instructions"
-            ]
-        ]
+        # Validate inputs
+        location = location.strip().lower() if location else 'unknown'
+        service = service.strip() if service else 'unknown'
+        cost_preference = get_valid_category(cost_preference, 'Medium')
+        quality_preference = get_valid_category(quality_preference, 'High')
+        logger.info(f'API inputs: Location={location}, Service={service}, Cost={cost_preference}, Quality={quality_preference}')
+        
+        # Filter by location
+        df = df[df['City'].str.lower() == location]
+        if df.empty:
+            logger.warning(f'No hospitals found in {location}')
+            return {'error': f'No hospitals found in {location.title()}'}
+        
+        # Calculate matches
+        df['Service_Match'] = df['Services'].apply(lambda x: compute_service_match(service, x, valid_services))
+        df['Location_Match'] = 1.0
+        logger.info('Service and location matches computed')
+        
+        # Debug: Log intermediate values
+        logger.info('\nIntermediate Values:\n' + df[['Name', 'Services', 'Cost_Numeric', 'Quality_Numeric', 'Service_Match']].to_string(index=False))
+        
+        # Setup and run fuzzy system
+        recommender = setup_fuzzy_system(df)
+        df['Recommendation_Score'] = df.apply(lambda x: get_recommendation_score(x, recommender), axis=1)
+        
+        # Filter and sort results
+        recommended_hospitals = df[
+            ['Name', 'Full Address', 'City', 'Services', 'Cost Level', 'Quality Score', 'User Rating', 'Recommendation_Score']
+        ].sort_values(by='Recommendation_Score', ascending=False).head(10)
+        
+        # Save to CSV for debugging
+        recommended_hospitals.to_csv('recommended_hospitals.csv', index=False)
+        logger.info('Recommendations saved to recommended_hospitals.csv')
+        
+        # Return as JSON-serializable dict
+        return recommended_hospitals.to_dict(orient='records')
+    
     except Exception as e:
-        logger.error(f"Error in recommendation: {e}")
-        return pd.DataFrame()
+        logger.error(f'Error in get_recommendations: {str(e)}')
+        return {'error': str(e)}
+
+def get_recommendation_score(hospital, recommender):
+    try:
+        recommender.input['cost'] = hospital['Cost_Numeric']
+        recommender.input['quality'] = hospital['Quality_Numeric']
+        recommender.input['service_match'] = hospital['Service_Match']
+        recommender.input['location_match'] = hospital['Location_Match']
+        recommender.compute()
+        score = recommender.output['recommendation']
+        logger.info(f'Hospital: {hospital["Name"]}, Service Match: {hospital["Service_Match"]:.2f}, Score: {score:.3f}')
+        return score
+    except Exception as e:
+        logger.error(f'Error processing {hospital["Name"]}: {str(e)}')
+        return 0.0
