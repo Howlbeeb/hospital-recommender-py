@@ -148,9 +148,7 @@ def extract_city(address):
     match = re.search(f'({cities})', address, re.IGNORECASE)
     if match:
         return match.group(1).lower()
-    # Fallback: last phrase after comma, cleaned up
     last_phrase = address.split(',')[-1].strip().lower()
-    # Remove non-city terms like "Lagos" or generic words
     if last_phrase in ['lagos', 'nigeria', 'state', 'lga', 'unknown', '']:
         return 'unknown'
     return last_phrase
@@ -180,36 +178,49 @@ def setup_fuzzy_system():
     location_match['medium'] = fuzz.trimf(location_match.universe, [0.3, 0.5, 0.7])
     location_match['high'] = fuzz.trimf(location_match.universe, [0.5, 1, 1])
 
-    recommendation['low'] = fuzz.trimf(recommendation.universe, [0, 0, 0.35])
-    recommendation['medium'] = fuzz.trimf(recommendation.universe, [0.3, 0.5, 0.65])
-    recommendation['high'] = fuzz.trimf(recommendation.universe, [0.65, 0.85, 1])
+    recommendation['low'] = fuzz.trimf(recommendation.universe, [0, 0, 0.4])
+    recommendation['medium'] = fuzz.trimf(recommendation.universe, [0.3, 0.5, 0.6])
+    recommendation['high'] = fuzz.trimf(recommendation.universe, [0.7, 0.85, 1])
 
-    # Fuzzy rules (adjusted for better differentiation)
+    # Fuzzy rules (reverted to 36 rules for better differentiation)
     rules = [
-        # Strong matches: high service, high location, aligned cost/quality
+        # Low cost preference
         ctrl.Rule(cost['low'] & service_match['high'] & location_match['high'] & quality['high'], recommendation['high']),
-        ctrl.Rule(cost['medium'] & service_match['high'] & location_match['high'] & quality['high'], recommendation['high']),
-        ctrl.Rule(cost['high'] & service_match['high'] & location_match['high'] & quality['high'], recommendation['high']),
-        ctrl.Rule(cost['premium'] & service_match['high'] & location_match['high'] & quality['high'], recommendation['high']),
         ctrl.Rule(cost['low'] & service_match['high'] & location_match['high'] & quality['medium'], recommendation['high']),
-        ctrl.Rule(cost['medium'] & service_match['high'] & location_match['high'] & quality['medium'], recommendation['high']),
-
-        # Medium matches: partial service or location, aligned cost/quality
+        ctrl.Rule(cost['low'] & service_match['high'] & location_match['medium'] & quality['high'], recommendation['high']),
         ctrl.Rule(cost['low'] & service_match['medium'] & location_match['high'] & quality['high'], recommendation['medium']),
-        ctrl.Rule(cost['medium'] & service_match['medium'] & location_match['high'] & quality['high'], recommendation['medium']),
-        ctrl.Rule(cost['high'] & service_match['medium'] & location_match['high'] & quality['high'], recommendation['medium']),
-        ctrl.Rule(cost['low'] & service_match['high'] & location_match['medium'] & quality['high'], recommendation['medium']),
-        ctrl.Rule(cost['medium'] & service_match['high'] & location_match['medium'] & quality['high'], recommendation['medium']),
         ctrl.Rule(cost['low'] & service_match['medium'] & location_match['medium'] & quality['medium'], recommendation['medium']),
+        ctrl.Rule(cost['low'] & (service_match['low'] | location_match['low']) & quality['high'], recommendation['low']),
+        ctrl.Rule(cost['low'] & service_match['low'] & location_match['low'] & quality['low'], recommendation['low']),
+        ctrl.Rule(cost['medium'] & service_match['high'] & location_match['high'] & quality['high'], recommendation['medium']),
 
-        # Weak matches: low service or location, even with high quality
-        ctrl.Rule(service_match['low'] & location_match['high'] & quality['high'], recommendation['low']),
-        ctrl.Rule(service_match['high'] & location_match['low'] & quality['high'], recommendation['low']),
-        ctrl.Rule(service_match['low'] & location_match['low'] & quality['high'], recommendation['low']),
-        ctrl.Rule(cost['high'] & service_match['low'] & location_match['high'] & quality['low'], recommendation['low']),
-        ctrl.Rule(cost['premium'] & service_match['low'] & location_match['high'] & quality['low'], recommendation['low']),
-        ctrl.Rule(cost['high'] & service_match['medium'] & location_match['high'] & quality['low'], recommendation['low']),
-        ctrl.Rule(cost['premium'] & service_match['medium'] & location_match['high'] & quality['low'], recommendation['low'])
+        # Medium cost preference
+        ctrl.Rule(cost['medium'] & service_match['high'] & location_match['high'] & quality['high'], recommendation['high']),
+        ctrl.Rule(cost['medium'] & service_match['high'] & location_match['high'] & quality['medium'], recommendation['high']),
+        ctrl.Rule(cost['medium'] & service_match['high'] & location_match['medium'] & quality['high'], recommendation['high']),
+        ctrl.Rule(cost['medium'] & service_match['medium'] & location_match['high'] & quality['high'], recommendation['medium']),
+        ctrl.Rule(cost['medium'] & service_match['medium'] & location_match['medium'] & quality['medium'], recommendation['medium']),
+        ctrl.Rule(cost['medium'] & (service_match['low'] | location_match['low']) & quality['high'], recommendation['low']),
+        ctrl.Rule(cost['medium'] & service_match['low'] & location_match['low'] & quality['low'], recommendation['low']),
+        ctrl.Rule(cost['high'] & service_match['high'] & location_match['high'] & quality['high'], recommendation['medium']),
+
+        # High cost preference
+        ctrl.Rule(cost['high'] & service_match['high'] & location_match['high'] & quality['high'], recommendation['high']),
+        ctrl.Rule(cost['high'] & service_match['high'] & location_match['high'] & quality['medium'], recommendation['high']),
+        ctrl.Rule(cost['high'] & service_match['high'] & location_match['medium'] & quality['high'], recommendation['high']),
+        ctrl.Rule(cost['high'] & service_match['medium'] & location_match['high'] & quality['high'], recommendation['medium']),
+        ctrl.Rule(cost['high'] & service_match['medium'] & location_match['medium'] & quality['medium'], recommendation['medium']),
+        ctrl.Rule(cost['high'] & (service_match['low'] | location_match['low']) & quality['high'], recommendation['low']),
+        ctrl.Rule(cost['high'] & service_match['low'] & location_match['low'] & quality['low'], recommendation['low']),
+
+        # Premium cost preference
+        ctrl.Rule(cost['premium'] & service_match['high'] & location_match['high'] & quality['high'], recommendation['high']),
+        ctrl.Rule(cost['premium'] & service_match['high'] & location_match['high'] & quality['medium'], recommendation['high']),
+        ctrl.Rule(cost['premium'] & service_match['high'] & location_match['medium'] & quality['high'], recommendation['high']),
+        ctrl.Rule(cost['premium'] & service_match['medium'] & location_match['high'] & quality['high'], recommendation['medium']),
+        ctrl.Rule(cost['premium'] & service_match['medium'] & location_match['medium'] & quality['medium'], recommendation['medium']),
+        ctrl.Rule(cost['premium'] & (service_match['low'] | location_match['low']) & quality['high'], recommendation['low']),
+        ctrl.Rule(cost['premium'] & service_match['low'] & location_match['low'] & quality['low'], recommendation['low'])
     ]
 
     recommender_ctrl = ctrl.ControlSystem(rules)
@@ -221,11 +232,9 @@ def compute_recommendation_score(row, user_service, user_cost_pref, user_quality
         cost_value = map_cost_rating(row["Cost Level"])
         quality_value = float(row["Quality Score"]) if pd.notna(row["Quality Score"]) else 3.0
         location_score = row["Location_Match"]
-        cost_diff = abs(cost_value - map_cost_rating(user_cost_pref)) / 2.0  # Normalize to [0, 1]
-        quality_diff = abs(quality_value - (2 + 3 * map_preference_to_value(user_quality_pref))) / 3.0  # Scale to [0, 1]
 
-        fuzzy_system.input["cost"] = cost_value + cost_diff  # Adjust cost to penalize mismatch
-        fuzzy_system.input["quality"] = quality_value - quality_diff  # Adjust quality to penalize mismatch
+        fuzzy_system.input["cost"] = cost_value
+        fuzzy_system.input["quality"] = quality_value
         fuzzy_system.input["service_match"] = service_score
         fuzzy_system.input["location_match"] = location_score
 
