@@ -49,7 +49,7 @@ async def health_check():
     return {"status": "healthy"}
 
 @app.post("/recommend", response_model=list[RecommendationResponse])
-async def get_recommendations_endpoint(request: RecommendationRequest):
+async def get_recommendations(request: RecommendationRequest):
     try:
         valid_categories = {"Low", "Medium", "High"}
         cost_pref = request.cost_preference.capitalize()
@@ -74,18 +74,16 @@ async def get_recommendations_endpoint(request: RecommendationRequest):
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error reading dataset: {str(e)}")
 
-        # Call get_recommendations with aligned input names
-        recommendations = get_recommendations(
+        recommendations = recommend_hospitals(
             location=request.location,
-            service=request.service_needed,  # Changed from user_service
-            cost_preference=cost_pref,      # Changed from cost_pref_str
-            quality_preference=quality_pref # Changed from quality_pref_str
+            user_service=request.service_needed,
+            cost_pref_str=cost_pref,
+            quality_pref_str=quality_pref
         )
 
-        if isinstance(recommendations, dict) and 'error' in recommendations:
-            raise HTTPException(status_code=404, detail=recommendations['error'])
+        if recommendations.empty:
+            raise HTTPException(status_code=404, detail="No hospitals found matching your criteria.")
 
-        # Convert list of dicts to response model
         response = [
             RecommendationResponse(
                 name=row["Name"],
@@ -94,11 +92,11 @@ async def get_recommendations_endpoint(request: RecommendationRequest):
                 cost_level=row["Cost Level"],
                 quality_score=row["Quality Score"],
                 recommendation_score=row["Recommendation_Score"],
-                route_distance=None,  # Nullable fields
-                route_duration=None,
-                route_instructions=None
+                route_distance=row.get("Route_Distance"),
+                route_duration=row.get("Route_Duration"),
+                route_instructions=row.get("Route_Instructions")
             )
-            for row in recommendations
+            for _, row in recommendations.iterrows()
         ]
 
         return response
