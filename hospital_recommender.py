@@ -124,120 +124,77 @@ def get_driving_route(user_coords, hospital_coords, hospital_name):
         return None, None, None, None
 
 def setup_fuzzy_system():
-    cost = ctrl.Antecedent(np.arange(1, 3.1, 0.1), "cost")
-    quality = ctrl.Antecedent(np.arange(3, 5.1, 0.1), "quality")
-    user_rating = ctrl.Antecedent(np.arange(1, 5.1, 0.1), "user_rating")
-    service_match = ctrl.Antecedent(np.arange(0, 1.1, 0.1), "service_match")
-    user_cost_pref = ctrl.Antecedent(np.arange(0, 1.1, 0.1), "user_cost_pref")
-    user_quality_pref = ctrl.Antecedent(np.arange(0, 1.1, 0.1), "user_quality_pref")
-    proximity = ctrl.Antecedent(np.arange(0, 1.1, 0.1), "proximity")
-    recommendation = ctrl.Consequent(np.arange(0, 1.1, 0.1), "recommendation")
+    cost = ctrl.Antecedent(np.arange(1, 3.1, 0.1), 'cost')
+    quality = ctrl.Antecedent(np.arange(2, 5.1, 0.1), 'quality')  # Adjusted to match dataset range
+    service_match = ctrl.Antecedent(np.arange(0, 1.01, 0.01), 'service_match')
+    location_match = ctrl.Antecedent(np.arange(0, 1.01, 0.01), 'location_match')
+    recommendation = ctrl.Consequent(np.arange(0, 1.01, 0.01), 'recommendation')
 
-    cost["low"] = fuzz.trapmf(cost.universe, [1, 1, 1.2, 1.8])
-    cost["medium"] = fuzz.trapmf(cost.universe, [1.2, 1.8, 2.2, 2.8])
-    cost["high"] = fuzz.trapmf(cost.universe, [2.2, 2.8, 3, 3])
+    # Membership functions
+    cost['low'] = fuzz.trimf(cost.universe, [1, 1, 1.5])
+    cost['medium'] = fuzz.trimf(cost.universe, [1.2, 1.5, 2])
+    cost['high'] = fuzz.trimf(cost.universe, [1.5, 2, 2.5])
+    cost['premium'] = fuzz.trimf(cost.universe, [2, 3, 3])
 
-    quality["low"] = fuzz.trapmf(quality.universe, [3, 3, 3.4, 3.8])
-    quality["medium"] = fuzz.trapmf(quality.universe, [3.4, 3.8, 4.2, 4.6])
-    quality["high"] = fuzz.trapmf(quality.universe, [4.2, 4.6, 5, 5])
+    quality['low'] = fuzz.trimf(quality.universe, [2, 2, 3])
+    quality['medium'] = fuzz.trimf(quality.universe, [2.5, 3, 4])
+    quality['high'] = fuzz.trimf(quality.universe, [3.5, 4.5, 5])
 
-    user_rating["low"] = fuzz.trapmf(user_rating.universe, [1, 1, 2, 3])
-    user_rating["medium"] = fuzz.trapmf(user_rating.universe, [2, 3, 3.5, 4])
-    user_rating["high"] = fuzz.trapmf(user_rating.universe, [3.5, 4, 5, 5])
+    service_match['low'] = fuzz.trimf(service_match.universe, [0, 0, 0.3])
+    service_match['medium'] = fuzz.trimf(service_match.universe, [0.2, 0.5, 0.7])
+    service_match['high'] = fuzz.trimf(service_match.universe, [0.6, 1, 1])
 
-    service_match["low"] = fuzz.trapmf(service_match.universe, [0, 0, 0.3, 0.6])
-    service_match["high"] = fuzz.trapmf(service_match.universe, [0.4, 0.7, 1, 1])
+    location_match['low'] = fuzz.trimf(location_match.universe, [0, 0, 0.5])
+    location_match['medium'] = fuzz.trimf(location_match.universe, [0.3, 0.5, 0.7])
+    location_match['high'] = fuzz.trimf(location_match.universe, [0.5, 1, 1])
 
-    user_cost_pref["low"] = fuzz.trapmf(user_cost_pref.universe, [0, 0, 0.2, 0.4])
-    user_cost_pref["medium"] = fuzz.trapmf(user_cost_pref.universe, [0.3, 0.5, 0.7, 0.9])
-    user_cost_pref["high"] = fuzz.trapmf(user_cost_pref.universe, [0.6, 0.8, 1, 1])
+    recommendation['low'] = fuzz.trimf(recommendation.universe, [0, 0, 0.4])
+    recommendation['medium'] = fuzz.trimf(recommendation.universe, [0.3, 0.5, 0.6])
+    recommendation['high'] = fuzz.trimf(recommendation.universe, [0.7, 0.85, 1])  # Tightened for differentiation
 
-    user_quality_pref["low"] = fuzz.trapmf(user_quality_pref.universe, [0, 0, 0.2, 0.4])
-    user_quality_pref["medium"] = fuzz.trapmf(user_quality_pref.universe, [0.3, 0.5, 0.7, 0.9])
-    user_quality_pref["high"] = fuzz.trapmf(user_quality_pref.universe, [0.6, 0.8, 1, 1])
-
-    proximity["far"] = fuzz.trapmf(proximity.universe, [0, 0, 0.2, 0.4])
-    proximity["medium"] = fuzz.trapmf(proximity.universe, [0.3, 0.4, 0.6, 0.7])
-    proximity["near"] = fuzz.trapmf(proximity.universe, [0.6, 0.7, 0.9, 1])
-    proximity["very_near"] = fuzz.trapmf(proximity.universe, [0.8, 0.9, 1, 1])
-
-    recommendation["low"] = fuzz.trapmf(recommendation.universe, [0, 0, 0.3, 0.5])
-    recommendation["medium"] = fuzz.trapmf(recommendation.universe, [0.4, 0.5, 0.6, 0.7])
-    recommendation["high"] = fuzz.trapmf(recommendation.universe, [0.6, 0.7, 1, 1])
-
+    # 24 fuzzy rules (no weights)
     rules = [
-        ctrl.Rule(
-            service_match["high"] & proximity["very_near"] & quality["high"] & user_rating["high"] &
-            ((cost["low"] & user_cost_pref["low"]) | (cost["medium"] & user_cost_pref["medium"]) | (cost["high"] & user_cost_pref["high"])) &
-            user_quality_pref["high"],
-            recommendation["high"]
-        ),
-        ctrl.Rule(
-            service_match["high"] & proximity["near"] & quality["high"] & user_rating["medium"] &
-            ((cost["low"] & user_cost_pref["low"]) | (cost["medium"] & user_cost_pref["medium"])) &
-            user_quality_pref["high"],
-            recommendation["high"]
-        ),
-        ctrl.Rule(
-            service_match["high"] & proximity["medium"] & (quality["medium"] | quality["high"]) & user_rating["medium"] &
-            ((cost["low"] & user_cost_pref["low"]) | (cost["medium"] & user_cost_pref["medium"])),
-            recommendation["medium"]
-        ),
-        ctrl.Rule(
-            service_match["high"] & proximity["near"] & quality["medium"] & user_rating["medium"] &
-            user_quality_pref["medium"],
-            recommendation["medium"]
-        ),
-        ctrl.Rule(
-            service_match["low"] | proximity["far"] | (quality["low"] & user_quality_pref["high"]),
-            recommendation["low"]
-        ),
-        ctrl.Rule(
-            (cost["high"] & user_cost_pref["low"]) | (cost["medium"] & user_cost_pref["low"]),
-            recommendation["low"]
-        ),
-        ctrl.Rule(
-            service_match["high"] & proximity["very_near"] & quality["medium"] & user_rating["high"] &
-            user_quality_pref["medium"] & (cost["low"] | cost["medium"]),
-            recommendation["high"]
-        ),
-        ctrl.Rule(
-            service_match["low"] & proximity["very_near"] & quality["high"] & user_rating["high"] &
-            user_quality_pref["high"] & cost["low"] & user_cost_pref["low"],
-            recommendation["medium"]
-        ),ctrl.Rule(
-            service_match["high"] & proximity["far"] & quality["high"] & user_rating["high"] &
-            cost["low"] & user_cost_pref["low"],
-            recommendation["medium"]  # Boost for high quality despite distance
-        ),
-        ctrl.Rule(
-            service_match["low"] & proximity["very_near"] & quality["medium"] & user_rating["medium"] &
-            cost["low"] & user_cost_pref["low"],
-            recommendation["medium"]
-        ),
-        ctrl.Rule(
-            service_match["high"] & proximity["near"] & quality["low"] & user_rating["medium"] &
-            cost["low"] & user_cost_pref["low"],
-            recommendation["medium"]
-        ),
-        ctrl.Rule(
-            service_match["low"] & proximity["near"] & quality["high"] & user_rating["high"] &
-            (cost["low"] | cost["medium"]) & user_cost_pref["high"],
-            recommendation["medium"]
-        ),
-        ctrl.Rule(
-            service_match["high"] & proximity["medium"] & quality["medium"] & user_rating["low"] &
-            cost["low"] & user_cost_pref["low"],
-            recommendation["medium"]
-        ),
-        ctrl.Rule(
-            service_match["low"] & proximity["far"] & quality["low"] & user_rating["low"],
-            recommendation["low"]
-        )
+        # Low cost preference
+        ctrl.Rule(cost['low'] & service_match['high'] & location_match['high'] & quality['high'], recommendation['high']),
+        ctrl.Rule(cost['low'] & service_match['high'] & location_match['high'] & quality['medium'], recommendation['high']),
+        ctrl.Rule(cost['low'] & service_match['high'] & location_match['medium'] & quality['high'], recommendation['high']),
+        ctrl.Rule(cost['low'] & service_match['medium'] & location_match['high'] & quality['high'], recommendation['medium']),
+        ctrl.Rule(cost['low'] & service_match['medium'] & location_match['medium'] & quality['medium'], recommendation['medium']),
+        ctrl.Rule(cost['low'] & (service_match['low'] | location_match['low']) & quality['high'], recommendation['low']),
+        ctrl.Rule(cost['low'] & service_match['low'] & location_match['low'] & quality['low'], recommendation['low']),
+        ctrl.Rule(cost['medium'] & service_match['high'] & location_match['high'] & quality['high'], recommendation['medium']),
+
+        # Medium cost preference
+        ctrl.Rule(cost['medium'] & service_match['high'] & location_match['high'] & quality['high'], recommendation['high']),
+        ctrl.Rule(cost['medium'] & service_match['high'] & location_match['high'] & quality['medium'], recommendation['high']),
+        ctrl.Rule(cost['medium'] & service_match['high'] & location_match['medium'] & quality['high'], recommendation['high']),
+        ctrl.Rule(cost['medium'] & service_match['medium'] & location_match['high'] & quality['high'], recommendation['medium']),
+        ctrl.Rule(cost['medium'] & service_match['medium'] & location_match['medium'] & quality['medium'], recommendation['medium']),
+        ctrl.Rule(cost['medium'] & (service_match['low'] | location_match['low']) & quality['high'], recommendation['low']),
+        ctrl.Rule(cost['medium'] & service_match['low'] & location_match['low'] & quality['low'], recommendation['low']),
+        ctrl.Rule(cost['high'] & service_match['high'] & location_match['high'] & quality['high'], recommendation['medium']),
+
+        # High cost preference
+        ctrl.Rule(cost['high'] & service_match['high'] & location_match['high'] & quality['high'], recommendation['high']),
+        ctrl.Rule(cost['high'] & service_match['high'] & location_match['high'] & quality['medium'], recommendation['high']),
+        ctrl.Rule(cost['high'] & service_match['high'] & location_match['medium'] & quality['high'], recommendation['high']),
+        ctrl.Rule(cost['high'] & service_match['medium'] & location_match['high'] & quality['high'], recommendation['medium']),
+        ctrl.Rule(cost['high'] & service_match['medium'] & location_match['medium'] & quality['medium'], recommendation['medium']),
+        ctrl.Rule(cost['high'] & (service_match['low'] | location_match['low']) & quality['high'], recommendation['low']),
+        ctrl.Rule(cost['high'] & service_match['low'] & location_match['low'] & quality['low'], recommendation['low']),
+
+        # Premium cost preference
+        ctrl.Rule(cost['premium'] & service_match['high'] & location_match['high'] & quality['high'], recommendation['high']),
+        ctrl.Rule(cost['premium'] & service_match['high'] & location_match['high'] & quality['medium'], recommendation['high']),
+        ctrl.Rule(cost['premium'] & service_match['high'] & location_match['medium'] & quality['high'], recommendation['high']),
+        ctrl.Rule(cost['premium'] & service_match['medium'] & location_match['high'] & quality['high'], recommendation['medium']),
+        ctrl.Rule(cost['premium'] & service_match['medium'] & location_match['medium'] & quality['medium'], recommendation['medium']),
+        ctrl.Rule(cost['premium'] & (service_match['low'] | location_match['low']) & quality['high'], recommendation['low']),
+        ctrl.Rule(cost['premium'] & service_match['low'] & location_match['low'] & quality['low'], recommendation['low'])
     ]
 
-    hospital_ctrl = ctrl.ControlSystem(rules)
-    return ctrl.ControlSystemSimulation(hospital_ctrl)
+    recommender_ctrl = ctrl.ControlSystem(rules)
+    return ctrl.ControlSystemSimulation(recommender_ctrl)
 
 def compute_recommendation_score(row, user_service, user_cost_pref, user_quality_pref, user_coords, fuzzy_system):
     try:
