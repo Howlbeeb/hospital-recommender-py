@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from recommender import get_recommendations  # Updated import
+from hospital_recommender import get_recommendations  # Updated import
 import pandas as pd
 import os
 
