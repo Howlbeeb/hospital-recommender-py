@@ -1,3 +1,4 @@
+# recommender.py
 
 import pandas as pd
 import numpy as np
@@ -6,7 +7,9 @@ from skfuzzy import control as ctrl
 import googlemaps
 import os
 import logging
+import re
 import polyline
+from datetime import datetime
 
 # Setup logging
 logging.basicConfig(filename='hospital_recommender.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -90,10 +93,10 @@ def geocode_address(address, cache):
     if address in cache:
         coords_str = cache[address]
         if coords_str == "None":
-            return DEFAULT_COORDS, "unknown"
+            return DEFAULT_COORDS
         try:
             lat, lon = map(float, coords_str.strip("()").split(","))
-            return (lat, lon), cache.get(f"{address}_city", "unknown")
+            return (lat, lon)
         except:
             logger.warning(f"Invalid cached coordinates for '{address}'. Re-geocoding.")
     
@@ -103,23 +106,14 @@ def geocode_address(address, cache):
         if geocode_result:
             location = geocode_result[0]["geometry"]["location"]
             coords = (location["lat"], location["lng"])
-            # Extract city from address components
-            city = "unknown"
-            for component in geocode_result[0]["address_components"]:
-                if "locality" in component["types"] or "administrative_area_level_2" in component["types"]:
-                    city = component["long_name"].lower()
-                    break
             cache[address] = f"({coords[0]},{coords[1]})"
-            cache[f"{address}_city"] = city
-            return coords, city
+            return coords
         cache[address] = "None"
-        cache[f"{address}_city"] = "unknown"
-        return DEFAULT_COORDS, "unknown"
+        return DEFAULT_COORDS
     except Exception as e:
         logger.error(f"Geocoding error for '{address}': {e}")
         cache[address] = "None"
-        cache[f"{address}_city"] = "unknown"
-        return DEFAULT_COORDS, "unknown"
+        return DEFAULT_COORDS
 
 def get_driving_route(user_coords, hospital_coords, hospital_name):
     if user_coords == DEFAULT_COORDS or hospital_coords == DEFAULT_COORDS:
@@ -141,6 +135,25 @@ def get_driving_route(user_coords, hospital_coords, hospital_name):
     except Exception as e:
         logger.error(f"Error fetching route to {hospital_name}: {e}")
         return None, None, None
+
+def extract_city(address):
+    cities = (
+        r'Ikorodu|Ikoyi|Ikeja|Victoria Island|Surulere|Badagry|Lagos Island|Agege|'
+        r'Alimosho|Apapa|Epe|Eti-Osa|Ibeju-Lekki|Ifako-Ijaiye|Kosofe|Lagos Mainland|'
+        r'Mushin|Ojo|Oshodi-Isolo|Shomolu|Ajeromi-Ifelodun|Amuwo-Odofin|'
+        r'Lekki|Ajah|Yaba|Gbagada|Maryland|Ilupeju|Ketu|Magodo|Ojota|Egbeda|'
+        r'Idimu|Ipaja|Bariga|Festac Town|Amuwo|Isolo|Okota|Ikotun|Ogudu|'
+        r'Alagbado|Ojodu|Iju|Akoka|Somolu|Agidingbi|Ogba|Isheri|Agbara|Ijanikin'
+    )
+    match = re.search(f'({cities})', address, re.IGNORECASE)
+    if match:
+        return match.group(1).lower()
+    # Fallback: last phrase after comma, cleaned up
+    last_phrase = address.split(',')[-1].strip().lower()
+    # Remove non-city terms like "Lagos" or generic words
+    if last_phrase in ['lagos', 'nigeria', 'state', 'lga', 'unknown', '']:
+        return 'unknown'
+    return last_phrase
 
 def setup_fuzzy_system():
     cost = ctrl.Antecedent(np.arange(1, 3.1, 0.1), 'cost')
@@ -167,69 +180,58 @@ def setup_fuzzy_system():
     location_match['medium'] = fuzz.trimf(location_match.universe, [0.3, 0.5, 0.7])
     location_match['high'] = fuzz.trimf(location_match.universe, [0.5, 1, 1])
 
-    recommendation['low'] = fuzz.trimf(recommendation.universe, [0, 0, 0.4])
-    recommendation['medium'] = fuzz.trimf(recommendation.universe, [0.3, 0.5, 0.6])
-    recommendation['high'] = fuzz.trimf(recommendation.universe, [0.7, 0.85, 1])
+    recommendation['low'] = fuzz.trimf(recommendation.universe, [0, 0, 0.35])
+    recommendation['medium'] = fuzz.trimf(recommendation.universe, [0.3, 0.5, 0.65])
+    recommendation['high'] = fuzz.trimf(recommendation.universe, [0.65, 0.85, 1])
 
-    # Fuzzy rules
+    # Fuzzy rules (adjusted for better differentiation)
     rules = [
-        # Low cost preference
+        # Strong matches: high service, high location, aligned cost/quality
         ctrl.Rule(cost['low'] & service_match['high'] & location_match['high'] & quality['high'], recommendation['high']),
-        ctrl.Rule(cost['low'] & service_match['high'] & location_match['high'] & quality['medium'], recommendation['high']),
-        ctrl.Rule(cost['low'] & service_match['high'] & location_match['medium'] & quality['high'], recommendation['high']),
-        ctrl.Rule(cost['low'] & service_match['medium'] & location_match['high'] & quality['high'], recommendation['medium']),
-        ctrl.Rule(cost['low'] & service_match['medium'] & location_match['medium'] & quality['medium'], recommendation['medium']),
-        ctrl.Rule(cost['low'] & (service_match['low'] | location_match['low']) & quality['high'], recommendation['low']),
-        ctrl.Rule(cost['low'] & service_match['low'] & location_match['low'] & quality['low'], recommendation['low']),
-        ctrl.Rule(cost['medium'] & service_match['high'] & location_match['high'] & quality['high'], recommendation['medium']),
-
-        # Medium cost preference
         ctrl.Rule(cost['medium'] & service_match['high'] & location_match['high'] & quality['high'], recommendation['high']),
-        ctrl.Rule(cost['medium'] & service_match['high'] & location_match['high'] & quality['medium'], recommendation['high']),
-        ctrl.Rule(cost['medium'] & service_match['high'] & location_match['medium'] & quality['high'], recommendation['high']),
-        ctrl.Rule(cost['medium'] & service_match['medium'] & location_match['high'] & quality['high'], recommendation['medium']),
-        ctrl.Rule(cost['medium'] & service_match['medium'] & location_match['medium'] & quality['medium'], recommendation['medium']),
-        ctrl.Rule(cost['medium'] & (service_match['low'] | location_match['low']) & quality['high'], recommendation['low']),
-        ctrl.Rule(cost['medium'] & service_match['low'] & location_match['low'] & quality['low'], recommendation['low']),
-        ctrl.Rule(cost['high'] & service_match['high'] & location_match['high'] & quality['high'], recommendation['medium']),
-
-        # High cost preference
         ctrl.Rule(cost['high'] & service_match['high'] & location_match['high'] & quality['high'], recommendation['high']),
-        ctrl.Rule(cost['high'] & service_match['high'] & location_match['high'] & quality['medium'], recommendation['high']),
-        ctrl.Rule(cost['high'] & service_match['high'] & location_match['medium'] & quality['high'], recommendation['high']),
-        ctrl.Rule(cost['high'] & service_match['medium'] & location_match['high'] & quality['high'], recommendation['medium']),
-        ctrl.Rule(cost['high'] & service_match['medium'] & location_match['medium'] & quality['medium'], recommendation['medium']),
-        ctrl.Rule(cost['high'] & (service_match['low'] | location_match['low']) & quality['high'], recommendation['low']),
-        ctrl.Rule(cost['high'] & service_match['low'] & location_match['low'] & quality['low'], recommendation['low']),
-
-        # Premium cost preference
         ctrl.Rule(cost['premium'] & service_match['high'] & location_match['high'] & quality['high'], recommendation['high']),
-        ctrl.Rule(cost['premium'] & service_match['high'] & location_match['high'] & quality['medium'], recommendation['high']),
-        ctrl.Rule(cost['premium'] & service_match['high'] & location_match['medium'] & quality['high'], recommendation['high']),
-        ctrl.Rule(cost['premium'] & service_match['medium'] & location_match['high'] & quality['high'], recommendation['medium']),
-        ctrl.Rule(cost['premium'] & service_match['medium'] & location_match['medium'] & quality['medium'], recommendation['medium']),
-        ctrl.Rule(cost['premium'] & (service_match['low'] | location_match['low']) & quality['high'], recommendation['low']),
-        ctrl.Rule(cost['premium'] & service_match['low'] & location_match['low'] & quality['low'], recommendation['low'])
+        ctrl.Rule(cost['low'] & service_match['high'] & location_match['high'] & quality['medium'], recommendation['high']),
+        ctrl.Rule(cost['medium'] & service_match['high'] & location_match['high'] & quality['medium'], recommendation['high']),
+
+        # Medium matches: partial service or location, aligned cost/quality
+        ctrl.Rule(cost['low'] & service_match['medium'] & location_match['high'] & quality['high'], recommendation['medium']),
+        ctrl.Rule(cost['medium'] & service_match['medium'] & location_match['high'] & quality['high'], recommendation['medium']),
+        ctrl.Rule(cost['high'] & service_match['medium'] & location_match['high'] & quality['high'], recommendation['medium']),
+        ctrl.Rule(cost['low'] & service_match['high'] & location_match['medium'] & quality['high'], recommendation['medium']),
+        ctrl.Rule(cost['medium'] & service_match['high'] & location_match['medium'] & quality['high'], recommendation['medium']),
+        ctrl.Rule(cost['low'] & service_match['medium'] & location_match['medium'] & quality['medium'], recommendation['medium']),
+
+        # Weak matches: low service or location, even with high quality
+        ctrl.Rule(service_match['low'] & location_match['high'] & quality['high'], recommendation['low']),
+        ctrl.Rule(service_match['high'] & location_match['low'] & quality['high'], recommendation['low']),
+        ctrl.Rule(service_match['low'] & location_match['low'] & quality['high'], recommendation['low']),
+        ctrl.Rule(cost['high'] & service_match['low'] & location_match['high'] & quality['low'], recommendation['low']),
+        ctrl.Rule(cost['premium'] & service_match['low'] & location_match['high'] & quality['low'], recommendation['low']),
+        ctrl.Rule(cost['high'] & service_match['medium'] & location_match['high'] & quality['low'], recommendation['low']),
+        ctrl.Rule(cost['premium'] & service_match['medium'] & location_match['high'] & quality['low'], recommendation['low'])
     ]
 
     recommender_ctrl = ctrl.ControlSystem(rules)
     return ctrl.ControlSystemSimulation(recommender_ctrl)
 
-def compute_recommendation_score(row, user_service, fuzzy_system):
+def compute_recommendation_score(row, user_service, user_cost_pref, user_quality_pref, fuzzy_system):
     try:
         service_score = compute_service_match(user_service, row["Services"])
         cost_value = map_cost_rating(row["Cost Level"])
         quality_value = float(row["Quality Score"]) if pd.notna(row["Quality Score"]) else 3.0
         location_score = row["Location_Match"]
+        cost_diff = abs(cost_value - map_cost_rating(user_cost_pref)) / 2.0  # Normalize to [0, 1]
+        quality_diff = abs(quality_value - (2 + 3 * map_preference_to_value(user_quality_pref))) / 3.0  # Scale to [0, 1]
 
-        fuzzy_system.input["cost"] = cost_value
-        fuzzy_system.input["quality"] = quality_value
+        fuzzy_system.input["cost"] = cost_value + cost_diff  # Adjust cost to penalize mismatch
+        fuzzy_system.input["quality"] = quality_value - quality_diff  # Adjust quality to penalize mismatch
         fuzzy_system.input["service_match"] = service_score
         fuzzy_system.input["location_match"] = location_score
 
         fuzzy_system.compute()
         score = fuzzy_system.output.get("recommendation", 0.0)
-        logger.info(f"Hospital: {row['Name']}, Service Match: {service_score:.2f}, Location Match: {location_score:.2f}, Score: {score:.3f}")
+        logger.info(f"Hospital: {row['Name']}, Service Match: {service_score:.2f}, Location Match: {location_score:.2f}, Cost: {cost_value:.2f}, Quality: {quality_value:.2f}, Score: {score:.3f}")
         return score
     except Exception as e:
         logger.error(f"Error processing {row['Name']}: {e}")
@@ -262,30 +264,34 @@ def recommend_hospitals(location, user_service, cost_pref_str, quality_pref_str)
 
         cost_pref_str = get_valid_category(cost_pref_str, "Medium")
         quality_pref_str = get_valid_category(quality_pref_str, "High")
+        cost_pref_value = map_preference_to_value(cost_pref_str)
+        quality_pref_value = map_preference_to_value(quality_pref_str)
 
+        # Extract user city from location
+        user_city = extract_city(location)
+        logger.info(f"User city extracted: {user_city}")
+
+        # Extract hospital cities
+        data["City"] = data["Full Address"].apply(extract_city)
+        logger.info(f"Unique hospital cities: {data['City'].unique()}")
+
+        # Compute Location_Match
+        data["Location_Match"] = data["City"].apply(lambda city: 1.0 if city.lower() == user_city.lower() else 0.0)
+        data = data[data["Location_Match"] == 1.0]
+        if data.empty:
+            logger.warning(f"No hospitals found in city '{user_city}'")
+            return pd.DataFrame()
+
+        # Geocode for routing
         cache_file = "hospital_coordinates.csv"
         geocode_cache = load_geocode_cache(cache_file)
-
-        # Geocode user location
-        user_coords, user_city = geocode_address(location, geocode_cache)
-        if user_city == "unknown":
-            logger.warning(f"Could not determine city for location '{location}'. Using all hospitals.")
-            data["Location_Match"] = 1.0
-        else:
-            # Geocode hospital addresses and extract cities
-            data["Coordinates"] = data["Full Address"].apply(lambda addr: geocode_address(addr, geocode_cache)[0])
-            data["City"] = data["Full Address"].apply(lambda addr: geocode_cache.get(f"{addr}_city", "unknown"))
-            data["Location_Match"] = data["City"].apply(lambda city: 1.0 if city.lower() == user_city.lower() else 0.0)
-            data = data[data["Location_Match"] == 1.0]
-            if data.empty:
-                logger.warning(f"No hospitals found in city '{user_city}'")
-                return pd.DataFrame()
-
+        user_coords = geocode_address(location, geocode_cache)
+        data["Coordinates"] = data["Full Address"].apply(lambda addr: geocode_address(addr, geocode_cache))
         save_geocode_cache(geocode_cache, cache_file)
 
         fuzzy_system = setup_fuzzy_system()
         data["Recommendation_Score"] = data.apply(
-            lambda row: compute_recommendation_score(row, user_service, fuzzy_system),
+            lambda row: compute_recommendation_score(row, user_service, cost_pref_str, quality_pref_str, fuzzy_system),
             axis=1
         )
 
