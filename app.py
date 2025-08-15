@@ -48,7 +48,7 @@ async def root():
 async def health_check():
     return {"status": "healthy"}
 
-@app.post("/recommend", response_model=list[RecommendationResponse])
+@app.post("/recommend")
 async def get_recommendations(request: RecommendationRequest):
     try:
         valid_categories = {"Low", "Medium", "High"}
@@ -74,7 +74,8 @@ async def get_recommendations(request: RecommendationRequest):
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error reading dataset: {str(e)}")
 
-        recommendations = recommend_hospitals(
+        # Unpack the tuple from recommend_hospitals
+        recommendations, map_file = recommend_hospitals(
             location=request.location,
             user_service=request.service_needed,
             cost_pref_str=cost_pref,
@@ -84,6 +85,7 @@ async def get_recommendations(request: RecommendationRequest):
         if recommendations.empty:
             raise HTTPException(status_code=404, detail="No hospitals found matching your criteria.")
 
+        # Convert DataFrame to list of RecommendationResponse objects
         response = [
             RecommendationResponse(
                 name=row["Name"],
@@ -99,7 +101,9 @@ async def get_recommendations(request: RecommendationRequest):
             for _, row in recommendations.iterrows()
         ]
 
-        return response
+        # Add map URL to the response
+        map_url = f"/map" if map_file else None
+        return {"recommendations": response, "map_url": map_url}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}")
