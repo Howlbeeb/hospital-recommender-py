@@ -10,6 +10,7 @@ import logging
 import re
 import polyline
 from datetime import datetime
+from jinja2 import Template
 
 # Setup logging
 logging.basicConfig(filename='hospital_recommender.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -153,6 +154,143 @@ def extract_city(address):
         return 'unknown'
     return last_phrase
 
+def generate_map_html(recommendations, user_coords, api_key, user_service, location):
+    """Generate HTML with an interactive Google Map for recommended hospitals."""
+    if recommendations.empty:
+        return None
+    
+    # Prepare hospital data for JavaScript
+    hospitals = []
+    for idx, row in recommendations.iterrows():
+        coords = row["Coordinates"]
+        hospitals.append({
+            "name": row["Name"],
+            "address": row["Full Address"],
+            "services": row["Services"],
+            "cost_level": row["Cost Level"],
+            "quality_score": row["Quality Score"],
+            "recommendation_score": round(row["Recommendation_Score"], 3),
+            "lat": coords[0],
+            "lng": coords[1],
+            "route_distance": row["Route_Distance"] if pd.notna(row["Route_Distance"]) else "N/A",
+            "route_duration": row["Route_Duration"] if pd.notna(row["Route_Duration"]) else "N/A"
+        })
+    
+    # Center map on user location or Lagos default
+    center_lat, center_lng = user_coords if user_coords != DEFAULT_COORDS else DEFAULT_COORDS
+    
+    # HTML template with Google Maps JavaScript API
+    template = Template("""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Hospital Recommendations Map</title>
+        <style>
+            #map { height: 500px; width: 100%; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; }
+            .address-link { color: blue; cursor: pointer; text-decoration: underline; }
+        </style>
+        <script src="https://maps.googleapis.com/maps/api/js?key={{ api_key }}&callback=initMap" async defer></script>
+    </head>
+    <body>
+        <h2>Recommended Hospitals for {{ service }} in {{ location }}</h2>
+        <div id="map"></div>
+        <table>
+            <tr>
+                <th>Name</th>
+                <th>Address</th>
+                <th>Services</th>
+                <th>Cost Level</th>
+                <th>Quality Score</th>
+                <th>Recommendation Score</th>
+                <th>Distance</th>
+                <th>Duration</th>
+            </tr>
+            {% for hospital in hospitals %}
+            <tr>
+                <td>{{ hospital.name }}</td>
+                <td><span class="address-link" onclick="panToHospital({{ hospital.lat }}, {{ hospital.lng }}, '{{ hospital.name | replace("'", "\\'") }}')">{{ hospital.address }}</span></td>
+                <td>{{ hospital.services }}</td>
+                <td>{{ hospital.cost_level }}</td>
+                <td>{{ hospital.quality_score }}</td>
+                <td>{{ hospital.recommendation_score }}</td>
+                <td>{{ hospital.route_distance }}</td>
+                <td>{{ hospital.route_duration }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        <script>
+            let map;
+            let markers = [];
+            function initMap() {
+                map = new google.maps.Map(document.getElementById('map'), {
+                    center: {lat: {{ center_lat }}, lng: {{ center_lng }}},
+                    zoom: 12
+                });
+                {% for hospital in hospitals %}
+                const marker = new google.maps.Marker({
+                    position: {lat: {{ hospital.lat }}, lng: {{ hospital.lng }}},
+                    map: map,
+                    title: '{{ hospital.name | replace("'", "\\'") }}'
+                });
+                const infoWindow = new google.maps.InfoWindow({
+                    content: `
+                        <div>
+                            <h3>{{ hospital.name | replace("'", "\\'") }}</h3>
+                            <p><strong>Address:</strong> {{ hospital.address | replace("'", "\\'") }}</p>
+                            <p><strong>Services:</strong> {{ hospital.services | replace("'", "\\'") }}</p>
+                            <p><strong>Cost Level:</strong> {{ hospital.cost_level }}</p>
+                            <p><strong>Quality Score:</strong> {{ hospital.quality_score }}</p>
+                            <p><strong>Recommendation Score:</strong> {{ hospital.recommendation_score }}</p>
+                        </div>
+                    `
+                });
+                marker.addListener('click', () => {
+                    infoWindow.open(map, marker);
+                });
+                markers.push({marker: marker, infoWindow: infoWindow});
+                {% endfor %}
+            }
+            function panToHospital(lat, lng, name) {
+                map.setCenter({lat: lat, lng: lng});
+                map.setZoom(15);
+                markers.forEach(m => {
+                    if (m.marker.getTitle() === name) {
+                        m.infoWindow.open(map, m.marker);
+                    } else {
+                        m.infoWindow.close();
+                    }
+                });
+            }
+        </script>
+    </body>
+    </html>
+    """)
+    
+    # Render HTML
+    html_content = template.render(
+        api_key=api_key,
+        hospitals=hospitals,
+        service=user_service,
+        location=location.title(),
+        center_lat=center_lat,
+        center_lng=center_lng
+    )
+    
+    # Save HTML file
+    try:
+        map_file = "static/map_output.html"
+        os.makedirs(os.path.dirname(map_file), exist_ok=True)
+        with open(map_file, "w") as f:
+            f.write(html_content)
+        logger.info(f"Interactive map saved to {map_file}")
+        return map_file
+    except Exception as e:
+        logger.error(f"Error saving map HTML: {e}")
+        return None
+
 def setup_fuzzy_system():
     cost = ctrl.Antecedent(np.arange(1, 3.1, 0.1), 'cost')
     quality = ctrl.Antecedent(np.arange(2, 5.1, 0.1), 'quality')
@@ -182,7 +320,7 @@ def setup_fuzzy_system():
     recommendation['medium'] = fuzz.trimf(recommendation.universe, [0.3, 0.5, 0.6])
     recommendation['high'] = fuzz.trimf(recommendation.universe, [0.7, 0.85, 1])
 
-    # Fuzzy rules (reverted to 36 rules for better differentiation)
+    # Fuzzy rules (36 rules for better differentiation)
     rules = [
         # Low cost preference
         ctrl.Rule(cost['low'] & service_match['high'] & location_match['high'] & quality['high'], recommendation['high']),
@@ -248,7 +386,7 @@ def compute_recommendation_score(row, user_service, user_cost_pref, user_quality
 
 def recommend_hospitals(location, user_service, cost_pref_str, quality_pref_str):
     """
-    Generate hospital recommendations based on user inputs.
+    Generate hospital recommendations with an interactive map.
     
     Args:
         location (str): Preferred city or address (e.g., 'Ikorodu')
@@ -257,7 +395,7 @@ def recommend_hospitals(location, user_service, cost_pref_str, quality_pref_str)
         quality_pref_str (str): Quality preference ('Low', 'Medium', 'High')
     
     Returns:
-        pd.DataFrame: Recommended hospitals with routing data
+        tuple: (pd.DataFrame of recommendations, str path to map_output.html or None)
     """
     try:
         logger.info("Loading dataset Lagos_hospital.csv")
@@ -289,9 +427,9 @@ def recommend_hospitals(location, user_service, cost_pref_str, quality_pref_str)
         data = data[data["Location_Match"] == 1.0]
         if data.empty:
             logger.warning(f"No hospitals found in city '{user_city}'")
-            return pd.DataFrame()
+            return pd.DataFrame(), None
 
-        # Geocode for routing
+        # Geocode for routing and map
         cache_file = "hospital_coordinates.csv"
         geocode_cache = load_geocode_cache(cache_file)
         user_coords = geocode_address(location, geocode_cache)
@@ -307,7 +445,7 @@ def recommend_hospitals(location, user_service, cost_pref_str, quality_pref_str)
         recommendations = data[data["Recommendation_Score"] > 0].copy()
         if recommendations.empty:
             logger.warning(f"No hospitals found matching service '{user_service}'")
-            return pd.DataFrame()
+            return pd.DataFrame(), None
 
         recommendations = recommendations.sort_values(by="Recommendation_Score", ascending=False).head(3)
 
@@ -320,6 +458,9 @@ def recommend_hospitals(location, user_service, cost_pref_str, quality_pref_str)
             recommendations.at[idx, "Route_Duration"] = duration
             recommendations.at[idx, "Route_Instructions"] = instructions if instructions else "N/A"
 
+        # Generate interactive map
+        map_file = generate_map_html(recommendations, user_coords, GOOGLE_API_KEY, user_service, location)
+
         recommendations.to_csv("recommended_hospitals.csv", index=False)
         logger.info("Recommendations saved to recommended_hospitals.csv")
 
@@ -328,7 +469,7 @@ def recommend_hospitals(location, user_service, cost_pref_str, quality_pref_str)
                 "Name", "Full Address", "Services", "Cost Level", "Quality Score",
                 "Recommendation_Score", "Route_Distance", "Route_Duration", "Route_Instructions"
             ]
-        ]
+        ], map_file
     except Exception as e:
         logger.error(f"Error in recommendation: {e}")
-        return pd.DataFrame()
+        return pd.DataFrame(), None
