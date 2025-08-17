@@ -123,7 +123,11 @@ def get_driving_route(user_coords, hospital_coords, hospital_name):
         logger.error(f"Error fetching route to {hospital_name}: {e}")
         return None, None, None, None
 
+
+
 def setup_fuzzy_system():
+
+    # Membership function definition
     cost = ctrl.Antecedent(np.arange(1, 3.1, 0.1), "cost")
     quality = ctrl.Antecedent(np.arange(3, 5.1, 0.1), "quality")
     user_rating = ctrl.Antecedent(np.arange(1, 5.1, 0.1), "user_rating")
@@ -165,6 +169,8 @@ def setup_fuzzy_system():
     recommendation["medium"] = fuzz.trapmf(recommendation.universe, [0.4, 0.5, 0.6, 0.7])
     recommendation["high"] = fuzz.trapmf(recommendation.universe, [0.6, 0.7, 1, 1])
 
+
+# Fuzzy rules
     rules = [
         ctrl.Rule(
             service_match["high"] & proximity["very_near"] & quality["high"] & user_rating["high"] &
@@ -189,7 +195,7 @@ def setup_fuzzy_system():
             recommendation["medium"]
         ),
         ctrl.Rule(
-            service_match["low"] | proximity["far"] | (quality["low"] & user_quality_pref["high"]),
+             service_match["low"] | proximity["far"] | (quality["low"] & user_quality_pref["high"]),
             recommendation["low"]
         ),
         ctrl.Rule(
@@ -211,6 +217,8 @@ def setup_fuzzy_system():
     hospital_ctrl = ctrl.ControlSystem(rules)
     return ctrl.ControlSystemSimulation(hospital_ctrl)
 
+
+# Inference system 
 def compute_recommendation_score(row, user_service, user_cost_pref, user_quality_pref, user_coords, fuzzy_system):
     try:
         service_score = compute_service_match(user_service, row["Services"])
@@ -219,6 +227,8 @@ def compute_recommendation_score(row, user_service, user_cost_pref, user_quality
         user_rating_value = float(row["User Rating"]) if pd.notna(row["User Rating"]) else 3.0
         proximity_score, _ = calculate_distance(user_coords, row.get("Coordinates"))
 
+
+# Fuzzification process
         fuzzy_system.input["cost"] = cost_value
         fuzzy_system.input["quality"] = quality_value
         fuzzy_system.input["user_rating"] = user_rating_value
